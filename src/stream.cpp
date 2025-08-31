@@ -1,6 +1,5 @@
 #include "globals.h"
-#include "streaming.h"
-#include <ArduinoLog.h>
+#include "mjpeg.h"
 
 // ==== Handle invalid URL requests ============================================
 void handleNotFound() {

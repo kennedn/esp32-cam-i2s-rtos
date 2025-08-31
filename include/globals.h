@@ -1,5 +1,6 @@
 #pragma once
 #include <WebServer.h>
+#include <ArduinoLog.h>
 
 #define APP_CPU     1
 #define PRO_CPU     0

@@ -1,10 +1,9 @@
-#include <ArduinoLog.h>
 #include <WebServer.h>
 #include <WiFi.h>
 #include "esp_camera.h"
 
 #include "globals.h"
-#include "streaming.h"
+#include "stream.h"
 #include "camera_pins.h"
 #include "logging.h"
 
@@ -57,8 +56,14 @@ void setup() {
     .fb_count       = 2,
     .fb_location = CAMERA_FB_IN_PSRAM,
     .grab_mode = CAMERA_GRAB_LATEST,
-    // .sccb_i2c_port = -1
   };
+
+  // Initialize the camera hardware
+  if (esp_camera_init(&camera_config) != ESP_OK) {
+    Log.fatal("setup: Error initializing the camera\n");
+    delay(10000);
+    ESP.restart();
+  }
 
 #if defined(CAMERA_MODEL_ESP_EYE)
   // ESP-EYE board requires pullups on these pins
@@ -66,10 +71,14 @@ void setup() {
   pinMode(14, INPUT_PULLUP);
 #endif
 
+sensor_t* s = esp_camera_sensor_get();
 #if defined (FLIP_VERTICALLY)
   // Optionally flip image vertically if requested
-  sensor_t* s = esp_camera_sensor_get();
   s->set_vflip(s, true);
+#endif
+
+#if defined (WHITEBALANCE)
+  s->set_wb_mode(s, WHITEBALANCE);
 #endif
 
   // Connect to WiFi using credentials from build flags
@@ -87,14 +96,8 @@ void setup() {
   // Print camera connection URL
   Serial.print("Camera Ready! Use 'http://");
   Serial.print(WiFi.localIP());
-  Serial.println("/mjpeg/1' to connect");
-
-  // Initialize the camera hardware
-  if (esp_camera_init(&camera_config) != ESP_OK) {
-    Log.fatal("setup: Error initializing the camera\n");
-    delay(10000);
-    ESP.restart();
-  }
+  Serial.print(MJPEG_URL);
+  Serial.println("' to connect");
 
   // Start the main streaming RTOS task on the PRO_CPU core
   xTaskCreatePinnedToCore(

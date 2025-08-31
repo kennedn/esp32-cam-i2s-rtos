@@ -1,7 +1,14 @@
 //  === Arduino-Log implementation  =================================================================
-#include <ArduinoLog.h>
+#include "globals.h"
 #include "logging.h"
 
+#define MILLIS_FUNCTION xTaskGetTickCount()
+// #define MILLIS_FUNCTION millis()
+
+#ifndef DISABLE_LOGGING
+void    printTimestampMillis(Print* logOutput);
+void    printBuffer(const char* aBuf, size_t aSize);
+#endif  //   #ifndef DISABLE_LOGGING
 // Setup default logging system
 void setupLogging() {
 #ifndef DISABLE_LOGGING
