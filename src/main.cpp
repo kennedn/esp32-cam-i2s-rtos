@@ -11,24 +11,31 @@
 WebServer server(80);
 
 // RTOS task handle for the MJPEG streaming service
-TaskHandle_t tMjpeg;            
+TaskHandle_t tMjpeg;
 
+/**
+ * @brief Arduino setup function: Initializes logging, camera, WiFi, and launches the streaming RTOS task.
+ *
+ * This function performs all system initialization, including hardware setup and network connection.
+ * It prints system diagnostics for debugging and starts the main MJPEG streaming task on a dedicated core.
+ *
+ * @return void
+ * @note Initializes global hardware and network state, launches RTOS task.
+ */
 void setup() {
-
-  // Setup Serial connection for debugging/logging
   Serial.begin(SERIAL_RATE);
-  delay(500); // Wait for Serial to connect
+  delay(500); // Allow time for Serial to connect
 
-  setupLogging(); // Initialize logging system
+  setupLogging();
 
-  // Print initial memory and system info
+  // Print memory and system info for diagnostics
   Log.trace("\n\nMulti-client MJPEG Server\n");
   Log.trace("setup: total heap  : %d\n", ESP.getHeapSize());
   Log.trace("setup: free heap   : %d\n", ESP.getFreeHeap());
   Log.trace("setup: total psram : %d\n", ESP.getPsramSize());
   Log.trace("setup: free psram  : %d\n", ESP.getFreePsram());
 
-  // Camera configuration struct
+  // Camera configuration struct (static to ensure it persists)
   static camera_config_t camera_config = {
     .pin_pwdn       = PWDN_GPIO_NUM,
     .pin_reset      = RESET_GPIO_NUM,
@@ -46,7 +53,6 @@ void setup() {
     .pin_vsync      = VSYNC_GPIO_NUM,
     .pin_href       = HREF_GPIO_NUM,
     .pin_pclk       = PCLK_GPIO_NUM,
-
     .xclk_freq_hz   = XCLK_FREQ,
     .ledc_timer     = LEDC_TIMER_0,
     .ledc_channel   = LEDC_CHANNEL_0,
@@ -54,11 +60,11 @@ void setup() {
     .frame_size     = FRAME_SIZE,
     .jpeg_quality   = JPEG_QUALITY,
     .fb_count       = 2,
-    .fb_location = CAMERA_FB_IN_PSRAM,
-    .grab_mode = CAMERA_GRAB_LATEST,
+    .fb_location    = CAMERA_FB_IN_PSRAM,
+    .grab_mode      = CAMERA_GRAB_LATEST,
   };
 
-  // Initialize the camera hardware
+  // Initialize the camera hardware; restart if initialization fails
   if (esp_camera_init(&camera_config) != ESP_OK) {
     Log.fatal("setup: Error initializing the camera\n");
     delay(10000);
@@ -66,14 +72,14 @@ void setup() {
   }
 
 #if defined(CAMERA_MODEL_ESP_EYE)
-  // ESP-EYE board requires pullups on these pins
+  // ESP-EYE board requires pullups on these pins for proper operation
   pinMode(13, INPUT_PULLUP);
   pinMode(14, INPUT_PULLUP);
 #endif
 
-sensor_t* s = esp_camera_sensor_get();
+  sensor_t* s = esp_camera_sensor_get();
 #if defined (FLIP_VERTICALLY)
-  // Optionally flip image vertically if requested
+  // Flip image vertically if requested by build flag
   s->set_vflip(s, true);
 #endif
 
@@ -93,7 +99,7 @@ sensor_t* s = esp_camera_sensor_get();
   Serial.println("");
   Serial.println("WiFi connected");
 
-  // Print camera connection URL
+  // Print camera connection URL for user convenience
   Serial.print("Camera Ready! Use 'http://");
   Serial.print(WiFi.localIP());
   Serial.print(MJPEG_URL);
@@ -102,7 +108,7 @@ sensor_t* s = esp_camera_sensor_get();
   // Start the main streaming RTOS task on the PRO_CPU core
   xTaskCreatePinnedToCore(
     setupCB,                 // Task function
-    "mjpeg",                 // Task name
+    "setup",                 // Task name
     3 * KILOBYTE,            // Stack size
     NULL,                    // Parameters
     tskIDLE_PRIORITY + 2,    // Priority
@@ -112,6 +118,13 @@ sensor_t* s = esp_camera_sensor_get();
   Log.trace("setup complete: free heap  : %d\n", ESP.getFreeHeap());
 }
 
+/**
+ * @brief Arduino loop function: Not used, as all logic is handled by RTOS tasks.
+ *
+ * Deletes the default Arduino loop task to free resources.
+ *
+ * @return void
+ */
 void loop() {
   // Delete the default Arduino loop task, as everything is handled by RTOS tasks
   vTaskDelete(NULL);

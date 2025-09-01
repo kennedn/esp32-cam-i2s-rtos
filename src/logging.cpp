@@ -6,10 +6,36 @@
 // #define MILLIS_FUNCTION millis()
 
 #ifndef DISABLE_LOGGING
-void    printTimestampMillis(Print* logOutput);
-void    printBuffer(const char* aBuf, size_t aSize);
+/**
+ * @brief Prints a timestamp in [days:hours:minutes:seconds.milliseconds] format to the log output.
+ *
+ * Used as a prefix for log messages to aid in debugging and event tracing.
+ *
+ * @param logOutput Pointer to the Print object for log output.
+ * @return void
+ */
+void printTimestampMillis(Print* logOutput);
+
+/**
+ * @brief Prints a buffer in hex and ASCII for debugging.
+ *
+ * Useful for inspecting raw data or binary buffers during development.
+ *
+ * @param aBuf Pointer to the buffer.
+ * @param aSize Size of the buffer in bytes.
+ * @return void
+ */
+void printBuffer(const char* aBuf, size_t aSize);
 #endif  //   #ifndef DISABLE_LOGGING
-// Setup default logging system
+
+/**
+ * @brief Initializes the logging system.
+ *
+ * Sets up the log level, output stream, and timestamp prefix.
+ * Should be called early in setup().
+ *
+ * @return void
+ */
 void setupLogging() {
 #ifndef DISABLE_LOGGING
   Log.begin(LOG_LEVEL, &Serial);
@@ -18,16 +44,24 @@ void setupLogging() {
 #endif  //  #ifndef DISABLE_LOGGING
 }
 
-
-// === millis() - based timestamp ==
+/**
+ * @brief Prints a simple millisecond-based timestamp to the log output.
+ *
+ * @param logOutput Pointer to the Print object for log output.
+ * @return void
+ */
 void printTimestamp(Print* logOutput) {
   char c[24];
   sprintf(c, "%10lu ", (long unsigned int) MILLIS_FUNCTION);
   logOutput->print(c);
 }
 
-
-// start-time-based timestamp ========
+/**
+ * @brief Prints a formatted timestamp (days:hours:minutes:seconds.milliseconds) to the log output.
+ *
+ * @param logOutput Pointer to the Print object for log output.
+ * @return void
+ */
 void printTimestampMillis(Print* logOutput) {
   char c[64];
   unsigned long mm = MILLIS_FUNCTION;
@@ -40,8 +74,17 @@ void printTimestampMillis(Print* logOutput) {
   logOutput->print(c);
 }
 
-
 #ifndef DISABLE_LOGGING
+/**
+ * @brief Prints the contents of a buffer in both hexadecimal and ASCII.
+ *
+ * Each line shows 16 bytes in hex and their ASCII representation.
+ * Non-printable characters are shown as '.'.
+ *
+ * @param aBuf Pointer to the buffer.
+ * @param aSize Size of the buffer in bytes.
+ * @return void
+ */
 void printBuffer(const char* aBuf, size_t aSize) {
     Serial.println("Buffer contents:");
 
