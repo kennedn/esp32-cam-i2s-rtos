@@ -1,5 +1,8 @@
 #include "globals.h"
 #include "mjpeg.h"
+#include "i2s.h"
+#include <WiFi.h>
+
 
 /**
  * @brief Handles HTTP requests to invalid URLs.
@@ -31,6 +34,7 @@ void setupCB(void* pvParameters) {
   TickType_t xLastWakeTime;
   const TickType_t xFrequency = pdMS_TO_TICKS(WSINTERVAL);
 
+
   // Create frame synchronization semaphore (binary) and set it to available
   frameSync = xSemaphoreCreateBinary();
   xSemaphoreGive(frameSync);
@@ -38,15 +42,25 @@ void setupCB(void* pvParameters) {
   // Launch camera capture RTOS task on the application core
   xTaskCreatePinnedToCore(
       camCB,        // Task function
-      "cam",        // Task name
+      "camera",     // Task name
       4 * KILOBYTE, // Stack size
       NULL,         // Parameters
       tskIDLE_PRIORITY + 2, // Priority
       &tCam,        // Task handle
       APP_CPU);     // Core
 
+  xTaskCreatePinnedToCore(
+      micCB, 
+      "microphone", 
+      4 * KILOBYTE, 
+      NULL, 
+      tskIDLE_PRIORITY + 1, 
+      &tMic, 
+      APP_CPU);
+
   // Register HTTP handlers for MJPEG stream and 404s
-  server.on(MJPEG_URL, HTTP_GET, handleJPGSstream);
+  server.on(MJPEG_URL, HTTP_GET, MJPEGHandler);
+  server.on(I2S_URL, HTTP_GET, I2SHandler);
   server.onNotFound(handleNotFound);
 
   // Start the web server

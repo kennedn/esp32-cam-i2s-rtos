@@ -6,12 +6,13 @@
 #include "stream.h"
 #include "camera_pins.h"
 #include "logging.h"
+#include "i2s.h"
 
 // Global web server instance on port 80
 WebServer server(80);
 
-// RTOS task handle for the MJPEG streaming service
-TaskHandle_t tMjpeg;
+// RTOS handle for setup task
+TaskHandle_t tSetup;
 
 /**
  * @brief Arduino setup function: Initializes logging, camera, WiFi, and launches the streaming RTOS task.
@@ -84,8 +85,11 @@ void setup() {
 #endif
 
 #if defined (WHITEBALANCE)
+  // Enable auto white balance if requested by build flag
   s->set_wb_mode(s, WHITEBALANCE);
 #endif
+
+  I2SSetup();
 
   // Connect to WiFi using credentials from build flags
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -112,7 +116,7 @@ void setup() {
     3 * KILOBYTE,            // Stack size
     NULL,                    // Parameters
     tskIDLE_PRIORITY + 2,    // Priority
-    &tMjpeg,                 // Task handle
+    &tSetup,                 // Task handle
     PRO_CPU);                // CPU core
 
   Log.trace("setup complete: free heap  : %d\n", ESP.getFreeHeap());

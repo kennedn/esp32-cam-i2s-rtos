@@ -11,4 +11,5 @@
 
 extern SemaphoreHandle_t frameSync;
 extern TaskHandle_t tCam;
+extern TaskHandle_t tMic;
 extern WebServer server;

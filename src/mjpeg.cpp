@@ -1,4 +1,5 @@
 #include "globals.h"
+#include "stream.h"
 #include <WiFi.h>
 #include "esp_camera.h"
 
@@ -20,14 +21,13 @@ const int hdrLen = strlen(HEADER);
 const int bdrLen = strlen(BOUNDARY);
 const int cntLen = strlen(CTNTTYPE);
 
-QueueHandle_t streamingClients;
 SemaphoreHandle_t frameSync;
 TaskHandle_t tCam;    // Camera frame capture task handle
 TaskHandle_t tStream; // Streaming task handle
+QueueHandle_t mjpegClients = xQueueCreate(5, sizeof(WiFiClient*));
 
 std::vector<uint8_t>* camBuf;   // Points to the latest captured frame for streaming
 
-void handleNotFound();
 void streamCB(void *pvParameters);
 
 /**
@@ -45,7 +45,6 @@ void camCB(void *pvParameters) {
   TickType_t xLastWakeTime;
   const TickType_t xFrequency = pdMS_TO_TICKS(1000 / FPS);
 
-  streamingClients = xQueueCreate(10, sizeof(WiFiClient *));
   xTaskCreatePinnedToCore(
       streamCB,
       "streamCB",
@@ -127,8 +126,8 @@ void camCB(void *pvParameters) {
  * @return void
  * @note May allocate a new WiFiClient and modify the streamingClients queue.
  */
-void handleJPGSstream(void) {
-  if (!uxQueueSpacesAvailable(streamingClients)) {
+void MJPEGHandler(void) {
+  if (!uxQueueSpacesAvailable(mjpegClients)) {
     Log.error("handleJPGSstream: Max number of WiFi clients reached\n");
     return;
   }
@@ -143,8 +142,9 @@ void handleJPGSstream(void) {
   client->setTimeout(1);
   client->write(HEADER, hdrLen);
   client->write(BOUNDARY, bdrLen);
+  client->clear(); 
 
-  xQueueSend(streamingClients, (void *)&client, 0);
+  xQueueSend(mjpegClients, (void *)&client, 0);
 
   // Resume tasks if they were suspended due to no clients
   if (eTaskGetState(tCam) == eSuspended)
@@ -190,12 +190,12 @@ void streamCB(void *pvParameters) {
 
   xLastWakeTime = xTaskGetTickCount();
   for (;;) {
-    UBaseType_t activeClients = uxQueueMessagesWaiting(streamingClients);
+    UBaseType_t activeClients = uxQueueMessagesWaiting(mjpegClients);
     if (activeClients) {
       WiFiClient *client;
 
       for (int i = 0; i < activeClients; i++) {
-        xQueueReceive(streamingClients, (void *)&client, 0);
+        xQueueReceive(mjpegClients, (void *)&client, 0);
 
         if (!client->connected()) {
           // Remove disconnected clients from the queue
@@ -228,7 +228,7 @@ void streamCB(void *pvParameters) {
           xSemaphoreGive(frameSync);
 
           // Keep the client in the queue for the next frame
-          xQueueSend(streamingClients, (void *)&client, 0);
+          xQueueSend(mjpegClients, (void *)&client, 0);
         }
       }
     } else {
