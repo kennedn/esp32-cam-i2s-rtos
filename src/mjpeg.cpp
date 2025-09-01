@@ -11,11 +11,6 @@ averageFilter<uint32_t> captureAvg(10);
 uint32_t lastPrintCam = millis();
 #endif
 
-#define FAIL_IF_OOM true
-#define OK_IF_OOM false
-#define PSRAM_ONLY true
-#define ANY_MEMORY false
-
 const char *HEADER = "HTTP/1.1 200 OK\r\n"
                      "Access-Control-Allow-Origin: *\r\n"
                      "Content-Type: multipart/x-mixed-replace; boundary=+++===123454321===+++\r\n";
@@ -29,66 +24,11 @@ QueueHandle_t streamingClients;
 SemaphoreHandle_t frameSync;
 TaskHandle_t tCam; // handles getting picture frames from the camera and storing them locally
 TaskHandle_t tStream;
-uint8_t noActiveClients; // number of active clients
 
-volatile size_t camSize; // size of the current frame, byte
-volatile char *camBuf;   // pointer to the current frame
+std::vector<uint8_t>* camBuf;   // pointer to the current frame vector
 
 void handleNotFound();
 void streamCB(void *pvParameters);
-
-// ==== Memory allocator that takes advantage of PSRAM if present =======================
-char *allocatePSRAM(size_t aSize)
-{
-  if (psramFound() && ESP.getFreePsram() > aSize)
-  {
-    return (char *)ps_malloc(aSize);
-  }
-  return NULL;
-}
-
-char *allocateMemory(char *aPtr, size_t aSize, bool fail, bool psramOnly)
-{
-
-  //  Since current buffer is too small, free it
-  if (aPtr != NULL)
-  {
-    free(aPtr);
-    aPtr = NULL;
-  }
-
-  char *ptr = NULL;
-
-  if (psramOnly)
-  {
-    ptr = allocatePSRAM(aSize);
-  }
-  else
-  {
-    // If memory requested is more than 2/3 of the currently free heap, try PSRAM immediately
-    if (aSize > ESP.getFreeHeap() * 2 / 3)
-    {
-      ptr = allocatePSRAM(aSize);
-    }
-    else
-    {
-      //  Enough free heap - let's try allocating fast RAM as a buffer
-      ptr = (char *)malloc(aSize);
-
-      //  If allocation on the heap failed, let's give PSRAM one more chance:
-      if (ptr == NULL)
-        ptr = allocatePSRAM(aSize);
-    }
-  }
-  // Finally, if the memory pointer is NULL, we were not able to allocate any memory, and that is a terminal condition.
-  if (fail && ptr == NULL)
-  {
-    Log.fatal("allocateMemory: Out of memory!");
-    delay(5000);
-    ESP.restart();
-  }
-  return ptr;
-}
 
 // ==== RTOS task to grab frames from the camera =========================
 void camCB(void *pvParameters)
@@ -98,10 +38,10 @@ void camCB(void *pvParameters)
   //  A running interval associated with currently desired frame rate
   const TickType_t xFrequency = pdMS_TO_TICKS(1000 / FPS);
 
-  // Creating a queue to track all connected clients
+  // Create a queue to track all connected clients
   streamingClients = xQueueCreate(10, sizeof(WiFiClient *));
 
-  //  Creating task to push the stream to all connected clients
+  // Create task to push the stream to all connected clients
   xTaskCreatePinnedToCore(
       streamCB,
       "streamCB",
@@ -111,12 +51,10 @@ void camCB(void *pvParameters)
       &tStream,
       APP_CPU);
 
-  //  Pointers to the 2 frames, their respective sizes and index of the current frame
-  char *fbs[2] = {NULL, NULL};
-  size_t fSize[2] = {0, 0};
+  // Double buffer for frames and index of the current frame
+  std::vector<uint8_t> fbs[2];
   int ifb = 0;
 
-  //=== loop() section  ===================
   xLastWakeTime = xTaskGetTickCount();
 
 #if defined(BENCHMARK)
@@ -127,7 +65,7 @@ void camCB(void *pvParameters)
 
   for (;;)
   {
-    //  Grab a frame from the camera and query its size
+    // Grab a frame from the camera and query its size
 
 #if defined(BENCHMARK)
     uint32_t captureStart = micros();
@@ -136,48 +74,42 @@ void camCB(void *pvParameters)
     fb = esp_camera_fb_get();
     size_t s = fb->len;
 
-    //  If frame size is more that we have previously allocated - request  125% of the current frame space
-    if (s > fSize[ifb])
+    // If frame size is more than we have previously allocated, reserve 125% more space
+    if (s > fbs[ifb].capacity())
     {
-      fSize[ifb] = s * 4 / 3;
-      fbs[ifb] = allocateMemory(fbs[ifb], fSize[ifb], FAIL_IF_OOM, ANY_MEMORY);
+      fbs[ifb].reserve(s * 4 / 3);
     }
 
-    //  Copy current frame into local buffer
-    char *b = (char *)fb->buf;
-    memcpy(fbs[ifb], b, s);
+    // Resize the vector to the actual size of the frame
+    fbs[ifb].resize(s);
+
+    // Copy current frame into local buffer
+    memcpy(fbs[ifb].data(), fb->buf, s);
     esp_camera_fb_return(fb);
 
 #if defined(BENCHMARK)
     captureAvg.value(micros() - captureStart);
 #endif
 
-    //  Only switch frames around if no frame is currently being streamed to a client
-    //  Wait on a semaphore until client operation completes
+    // Wait on a semaphore until client operation completes before switching frames
     xSemaphoreTake(frameSync, portMAX_DELAY);
 
-    //  Do not allow interrupts while switching the current frame
-    // taskENTER_CRITICAL(&xSemaphore);
-    camBuf = fbs[ifb];
-    camSize = s;
+    // Switch the current frame pointer to the newly captured frame
+    camBuf = &fbs[ifb];
     ++ifb;
-    ifb = ifb & 1; // this should produce 1, 0, 1, 0, 1 ... sequence
-    // taskEXIT_CRITICAL(&xSemaphore);
+    ifb = ifb & 1; // alternate between 0 and 1
 
-    //  Let anyone waiting for a frame know that the frame is ready
+    // Release the semaphore to allow streaming task to access the new frame
     xSemaphoreGive(frameSync);
 
-    //  Technically only needed once: let the streaming task know that we have at least one frame
-    //  and it could start sending frames to the clients, if any
+    // Notify the streaming task that a frame is ready (only needed once)
     xTaskNotifyGive(tStream);
 
-    //  Let other tasks run and wait until the end of the current frame rate interval (if any time left)
+    // Wait until the end of the current frame rate interval (if any time left)
     if (xTaskDelayUntil(&xLastWakeTime, xFrequency) != pdTRUE)
       taskYIELD();
 
-    //  If streaming task has suspended itself (no active clients to stream to)
-    //  there is no need to grab frames from the camera. We can save some juice
-    //  by suspedning the tasks
+    // If streaming task has suspended itself (no active clients), suspend this task to save power
     if (eTaskGetState(tStream) == eSuspended)
     {
       vTaskSuspend(NULL); // passing NULL means "suspend yourself"
@@ -196,14 +128,14 @@ void camCB(void *pvParameters)
 // ==== Handle connection request from clients ===============================
 void handleJPGSstream(void)
 {
-  //  Can only acommodate 10 clients. The limit is a default for WiFi connections
+  // Can only accommodate 10 clients. The limit is a default for WiFi connections
   if (!uxQueueSpacesAvailable(streamingClients))
   {
     Log.error("handleJPGSstream: Max number of WiFi clients reached\n");
     return;
   }
 
-  //  Create a new WiFi Client object to keep track of this one
+  // Create a new WiFi Client object to keep track of this one
   WiFiClient *client = new WiFiClient();
   if (client == NULL)
   {
@@ -212,7 +144,7 @@ void handleJPGSstream(void)
   }
   *client = server.client();
 
-  //  Immediately send this client a header
+  // Immediately send this client a header
   client->setTimeout(1);
   client->write(HEADER, hdrLen);
   client->write(BOUNDARY, bdrLen);
@@ -236,8 +168,7 @@ void streamCB(void *pvParameters)
   TickType_t xLastWakeTime;
   TickType_t xFrequency = pdMS_TO_TICKS(1000 / FPS);
 
-  //  Wait until the first frame is captured and there is something to send
-  //  to clients
+  // Wait until the first frame is captured and there is something to send to clients
   ulTaskNotifyTake(pdTRUE,         /* Clear the notification value before exiting. */
                    portMAX_DELAY); /* Block indefinitely. */
 
@@ -257,9 +188,7 @@ void streamCB(void *pvParameters)
   xLastWakeTime = xTaskGetTickCount();
   for (;;)
   {
-    // Default assumption we are running according to the FPS
-
-    //  Only bother to send anything if there is someone watching
+    // Only bother to send anything if there is someone watching
     UBaseType_t activeClients = uxQueueMessagesWaiting(streamingClients);
     if (activeClients)
     {
@@ -267,25 +196,19 @@ void streamCB(void *pvParameters)
 
       for (int i = 0; i < activeClients; i++)
       {
-        //  Since we are sending the same frame to everyone,
-        //  pop a client from the the front of the queue
-
+        // Pop a client from the front of the queue
         xQueueReceive(streamingClients, (void *)&client, 0);
 
-        //  Check if this client is still connected.
+        // Check if this client is still connected.
         if (!client->connected())
         {
-          //  delete this client reference if s/he has disconnected
-          //  and don't put it back on the queue anymore. Bye!
+          // Delete this client reference if disconnected and don't put it back on the queue
           Log.trace("streamCB: Client disconnected\n");
           delete client;
         }
         else
         {
-
-          //  Ok. This is an actively connected client.
-          //  Let's grab a semaphore to prevent frame changes while we
-          //  are serving this frame
+          // Actively connected client: grab a semaphore to prevent frame changes while serving this frame
 #if defined(BENCHMARK)
           streamStart = micros();
 #endif
@@ -294,37 +217,36 @@ void streamCB(void *pvParameters)
 
 #if defined(BENCHMARK)
           waitAvg.value(micros() - streamStart);
-          frameAvg.value(camSize);
+          frameAvg.value(camBuf->size());
           streamStart = micros();
 #endif
 
-          sprintf(buf, "%d\r\n\r\n", camSize);
-          client->clear();
+          // Send the frame to the client
+          sprintf(buf, "%zu\r\n\r\n", camBuf->size());
           client->write(CTNTTYPE, cntLen);
           client->write(buf, strlen(buf));
-          client->write((char *)camBuf, (size_t)camSize);
+          client->write((char *)camBuf->data(), camBuf->size());
           client->write(BOUNDARY, bdrLen);
 
 #if defined(BENCHMARK)
           streamAvg.value(micros() - streamStart);
 #endif
 
-          //  The frame has been served. Release the semaphore and let other tasks run.
-          //  If there is a frame switch ready, it will happen now in between frames
+          // The frame has been served. Release the semaphore and let other tasks run.
+          // If there is a frame switch ready, it will happen now in between frames
           xSemaphoreGive(frameSync);
 
-          // Since this client is still connected, push it to the end
-          // of the queue for further processing
+          // Since this client is still connected, push it to the end of the queue for further processing
           xQueueSend(streamingClients, (void *)&client, 0);
         }
       }
     }
     else
     {
-      //  Since there are no connected clients, there is no reason to waste battery running
+      // Since there are no connected clients, suspend this task to save power
       vTaskSuspend(NULL);
     }
-    //  Let other tasks run after serving every client
+    // Let other tasks run after serving every client
     if (xTaskDelayUntil(&xLastWakeTime, xFrequency) != pdTRUE)
       taskYIELD();
 
